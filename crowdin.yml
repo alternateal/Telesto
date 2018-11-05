@@ -15,3 +15,7 @@ files:
     translation: /app/src/main/res/values-%two_letters_code%/alert_descriptions.xml
     translate_attributes: 0
     content_segmentation: 0
+  - source: /app/src/main/res/values/exceptions.xml
+    translation: /app/src/main/res/values-%two_letters_code%/exceptions.xml
+    translate_attributes: 0
+    content_segmentation: 0
