@@ -51,7 +51,7 @@ public class ExceptionTranslator {
     }
 
     public static String getString(Exception exception) {
-        Integer res = TABLE.get(exception);
+        Integer res = TABLE.get(exception.getClass());
         return res == null ? exception.getClass().getSimpleName() : TelestoApp.getInstance().getString(res);
     }
 
