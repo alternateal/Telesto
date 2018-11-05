@@ -1,4 +1,4 @@
-package sugar.free.telesto.exceptions;
+package sugar.free.telesto.exceptions.satl_errors;
 
 import sugar.free.telesto.exceptions.satl_errors.SatlErrorException;
 
