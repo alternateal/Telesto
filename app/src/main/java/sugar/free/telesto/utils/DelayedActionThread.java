@@ -1,4 +1,4 @@
-package sugar.free.telesto.services.connection_service;
+package sugar.free.telesto.utils;
 
 public class DelayedActionThread extends Thread {
 

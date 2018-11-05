@@ -164,6 +164,7 @@ public class AlertService extends Service implements TelestoApp.InitializationCo
                         new Handler(Looper.getMainLooper()).post(() -> startActivity(intent));
                     }
                 }
+            } catch (InterruptedException ignored) {
             } catch (Exception e) {
                 e.printStackTrace();
             }

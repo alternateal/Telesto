@@ -13,8 +13,6 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.Log;
 
-import org.spongycastle.crypto.InvalidCipherTextException;
-
 import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -32,96 +30,71 @@ import sugar.free.telesto.exceptions.ConnectionFailedException;
 import sugar.free.telesto.exceptions.ConnectionLostException;
 import sugar.free.telesto.exceptions.DisconnectedException;
 import sugar.free.telesto.exceptions.OrbitalException;
-import sugar.free.telesto.exceptions.ReceivedPacketInInvalidStateException;
-import sugar.free.telesto.exceptions.RecoveryFailedException;
 import sugar.free.telesto.exceptions.SatlPairingRejectedException;
-import sugar.free.telesto.exceptions.SatlWrongStateException;
 import sugar.free.telesto.exceptions.SocketCreationFailedException;
 import sugar.free.telesto.exceptions.TimeoutException;
 import sugar.free.telesto.exceptions.app_layer_errors.InvalidServicePasswordException;
-import sugar.free.telesto.exceptions.satl_errors.SatlCompatibleStateErrorException;
-import sugar.free.telesto.exceptions.satl_errors.SatlIncompatibleVersionErrorException;
-import sugar.free.telesto.exceptions.satl_errors.SatlInvalidCommIdErrorException;
-import sugar.free.telesto.exceptions.satl_errors.SatlInvalidMessageTypeErrorException;
-import sugar.free.telesto.exceptions.satl_errors.SatlInvalidPacketErrorException;
-import sugar.free.telesto.exceptions.satl_errors.SatlInvalidPayloadLengthErrorException;
-import sugar.free.telesto.exceptions.satl_errors.SatlNoneErrorException;
-import sugar.free.telesto.exceptions.satl_errors.SatlUndefinedErrorException;
 import sugar.free.telesto.parser.app_layer.AppLayerMessage;
 import sugar.free.telesto.parser.app_layer.configuration.CloseConfigurationWriteSessionMessage;
 import sugar.free.telesto.parser.app_layer.configuration.OpenConfigurationWriteSessionMessage;
 import sugar.free.telesto.parser.app_layer.configuration.WriteConfigurationBlockMessage;
 import sugar.free.telesto.parser.app_layer.connection.ActivateServiceMessage;
-import sugar.free.telesto.parser.app_layer.connection.BindMessage;
-import sugar.free.telesto.parser.app_layer.connection.ConnectMessage;
 import sugar.free.telesto.parser.app_layer.connection.DisconnectMessage;
 import sugar.free.telesto.parser.app_layer.connection.ServiceChallengeMessage;
 import sugar.free.telesto.parser.ids.ServiceIDs;
 import sugar.free.telesto.parser.satl.ConnectionRequest;
-import sugar.free.telesto.parser.satl.ConnectionResponse;
-import sugar.free.telesto.parser.satl.DataMessage;
-import sugar.free.telesto.parser.satl.ErrorMessage;
 import sugar.free.telesto.parser.satl.KeyRequest;
-import sugar.free.telesto.parser.satl.KeyResponse;
 import sugar.free.telesto.parser.satl.PairingStatus;
 import sugar.free.telesto.parser.satl.SatlMessage;
-import sugar.free.telesto.parser.satl.SynAckResponse;
 import sugar.free.telesto.parser.satl.SynRequest;
 import sugar.free.telesto.parser.satl.VerifyConfirmRequest;
-import sugar.free.telesto.parser.satl.VerifyConfirmResponse;
-import sugar.free.telesto.parser.satl.VerifyDisplayRequest;
-import sugar.free.telesto.parser.satl.VerifyDisplayResponse;
 import sugar.free.telesto.parser.utils.ByteBuf;
 import sugar.free.telesto.parser.utils.Nonce;
 import sugar.free.telesto.parser.utils.crypto.Cryptograph;
-import sugar.free.telesto.parser.utils.crypto.DerivedKeys;
 import sugar.free.telesto.parser.utils.crypto.KeyPair;
+import sugar.free.telesto.utils.DelayedActionThread;
 import sugar.free.telesto.utils.NotificationUtil;
 import sugar.free.telesto.utils.PairingDataStorage;
 
 public class ConnectionService extends Service implements SocketHolder.Callback {
 
     private static final long RESPONSE_TIMEOUT = 6000;
-    private static final int NONCE_RECOVERY_INCREASE = 50;
 
     private List<StateCallback> stateCallbacks = Collections.synchronizedList(new ArrayList<>());
     private LocalBinder localBinder = new LocalBinder();
     private final Object $stateLock = new Object[0];
     private TelestoState state;
-    private PairingDataStorage pairingDataStorage;
+    protected PairingDataStorage pairingDataStorage;
     private PowerManager.WakeLock wakeLock;
     private final List<Object> connectionRequests = new ArrayList<>();
     private SocketHolder socketHolder;
     private DelayedActionThread disconnectionAwaiter;
     private DelayedActionThread recoveryAwaiter;
-    private DelayedActionThread timeoutThread;
+    DelayedActionThread timeoutThread;
     private BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
     private BluetoothDevice bluetoothDevice;
     private BluetoothSocket bluetoothSocket;
     private boolean receiverRegistered;
-    private SatlMessage lastSatlMessage;
-    private KeyRequest keyRequest;
+    SatlMessage lastSatlMessage;
+    KeyRequest keyRequest;
     private int socketAttempts = 0;
     private long waitingTime = 0;
     private ByteBuf byteBuf = new ByteBuf(1024);
-    private int recoveryAttempts = 0;
-    private String verificationString;
-    private SetupActivity setupActivity;
-    private boolean disconnectAfterMessage;
+    int recoveryAttempts = 0;
+    String verificationString;
+    SetupActivity setupActivity;
+    final MessageQueue messageQueue = new MessageQueue();
+    List<sugar.free.telesto.parser.app_layer.Service> activatedServices = Collections.synchronizedList(new ArrayList<>());
 
     private KeyPair keyPair;
     private byte[] randomBytes;
 
-    private MessageRequest activeRequest;
-    private final List<MessageRequest> messageRequests = new ArrayList<>();
-    private final List<sugar.free.telesto.parser.app_layer.Service> activatedServices = new ArrayList<>();
-
-    private KeyPair getKeyPair() {
+    KeyPair getKeyPair() {
         if  (keyPair == null) keyPair = Cryptograph.generateRSAKey();
         return keyPair;
     }
 
-    private byte[] getRandomBytes() {
+    byte[] getRandomBytes() {
         if (randomBytes == null) {
             randomBytes = new byte[28];
             new SecureRandom().nextBytes(randomBytes);
@@ -147,24 +120,22 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
             messageRequest.exception = new DisconnectedException();
             return messageRequest;
         }
-        synchronized (messageRequests) {
+        synchronized (messageQueue) {
             if (message instanceof WriteConfigurationBlockMessage)
-                messageRequests.add(new MessageRequest(new OpenConfigurationWriteSessionMessage()));
-            messageRequests.add(messageRequest);
+                messageQueue.enqueueRequest(new MessageRequest(new OpenConfigurationWriteSessionMessage()));
+            messageQueue.enqueueRequest(messageRequest);
             if (message instanceof WriteConfigurationBlockMessage)
-                messageRequests.add(new MessageRequest(new CloseConfigurationWriteSessionMessage()));
-            Collections.sort(messageRequests);
-            if (activeRequest == null) requestNextMessage();
+                messageQueue.enqueueRequest(new MessageRequest(new CloseConfigurationWriteSessionMessage()));
+            requestNextMessage();
         }
         return messageRequest;
     }
 
-    private void requestNextMessage() {
-        synchronized (messageRequests) {
-            if (messageRequests.size() > 0) {
-                activeRequest = messageRequests.get(0);
-                messageRequests.remove(0);
-                sugar.free.telesto.parser.app_layer.Service service = activeRequest.request.getService();
+    void requestNextMessage() {
+        synchronized (messageQueue) {
+            while (messageQueue.getActiveRequest() == null && messageQueue.hasPendingMessages()) {
+                messageQueue.nextRequest();
+                sugar.free.telesto.parser.app_layer.Service service = messageQueue.getActiveRequest().request.getService();
                 if (service != sugar.free.telesto.parser.app_layer.Service.CONNECTION && !activatedServices.contains(service)) {
                     if (service.getServicePassword() == null) {
                         ActivateServiceMessage activateServiceMessage = new ActivateServiceMessage();
@@ -173,58 +144,15 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
                         activateServiceMessage.setServicePassword(new byte[16]);
                         sendAppLayerMessage(activateServiceMessage);
                     } else if (service.getServicePassword().length() != 16) {
-                        completeActiveRequest(new InvalidServicePasswordException(0));
+                        messageQueue.completeActiveRequest(new InvalidServicePasswordException(0));
                     } else {
                         ServiceChallengeMessage serviceChallengeMessage = new ServiceChallengeMessage();
                         serviceChallengeMessage.setServiceID(ServiceIDs.IDS.getB(service));
                         serviceChallengeMessage.setVersion(service.getVersion());
                         sendAppLayerMessage(serviceChallengeMessage);
                     }
-                } else sendAppLayerMessage(activeRequest.getRequest());
+                } else sendAppLayerMessage(messageQueue.getActiveRequest().request);
             }
-        }
-    }
-
-    private void completeActiveRequest(AppLayerMessage response) {
-        synchronized (messageRequests) {
-            if (activeRequest == null) return;
-            synchronized (activeRequest) {
-                activeRequest.response = response;
-                activeRequest.notifyAll();
-            }
-            activeRequest = null;
-            requestNextMessage();
-        }
-    }
-
-    private void completeActiveRequest(Exception exception) {
-        synchronized (messageRequests) {
-            if (activeRequest == null) return;
-            synchronized (activeRequest) {
-                activeRequest.exception = exception;
-                activeRequest.notifyAll();
-            }
-            activeRequest = null;
-            requestNextMessage();
-        }
-    }
-
-    private void completeAllRequests(Exception exception) {
-        synchronized (messageRequests) {
-            if (activeRequest != null) {
-                synchronized (activeRequest) {
-                    activeRequest.exception = exception;
-                    activeRequest.notifyAll();
-                }
-                activeRequest = null;
-            }
-            for (MessageRequest messageRequest : messageRequests) {
-                synchronized (messageRequest) {
-                    messageRequest.exception = exception;
-                    messageRequest.notifyAll();
-                }
-            }
-            messageRequests.clear();
         }
     }
 
@@ -246,12 +174,14 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
         }
     }
 
-    private void setState(TelestoState state) {
+    void setState(TelestoState state) {
         synchronized ($stateLock) {
+            if (this.state == state) return;
+            this.state = state;
             if ((state == TelestoState.DISCONNECTED || state == TelestoState.NOT_PAIRED) && wakeLock.isHeld()) wakeLock.release();
             else if (!wakeLock.isHeld()) wakeLock.acquire();
             for (StateCallback stateCallback : stateCallbacks) stateCallback.stateChanged(state);
-            this.state = state;
+            Log.d("ConnectionService", "New state: " + state.name());
         }
     }
 
@@ -260,9 +190,15 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
             connectionRequests.add(lock);
             Log.d("ConnectionService", "Connection requested: " + lock);
             if (disconnectionAwaiter != null) disconnectionAwaiter.interrupt();
-            disconnectAfterMessage = false;
             TelestoState state = getState();
-            if ((state == TelestoState.DISCONNECTED || state == TelestoState.APP_DISCONNECT_MESSAGE) && pairingDataStorage.isPaired()) initiateConnection();
+            switch (state) {
+                case DISCONNECT_PENDING:
+                    setState(TelestoState.CONNECTED);
+                    break;
+                case DISCONNECTED:
+                    if (pairingDataStorage.isPaired()) initiateDisconnection();
+                    break;
+            }
         }
     }
 
@@ -318,12 +254,14 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
 
     private void initiateDisconnection() {
         if (getState() == TelestoState.CONNECTED) {
-            synchronized (messageRequests) {
-                disconnectAfterMessage = true;
-                if (activeRequest == null) {
+            synchronized (messageQueue) {
+                if (messageQueue.getActiveRequest() == null) {
                     setState(TelestoState.APP_DISCONNECT_MESSAGE);
-                    completeAllRequests(new AboutToDisconnectException());
+                    messageQueue.completePendingRequests(new AboutToDisconnectException());
                     sendAppLayerMessage(new DisconnectMessage());
+                } else {
+                    setState(TelestoState.DISCONNECT_PENDING);
+                    messageQueue.completePendingRequests(new AboutToDisconnectException());
                 }
             }
         } else disconnect();
@@ -366,9 +304,7 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
         keyRequest = null;
         byteBuf = new ByteBuf(1024);
         verificationString = null;
-        disconnectAfterMessage = false;
-        messageRequests.clear();
-        activeRequest = null;
+        messageQueue.reset();
         activatedServices.clear();
     }
 
@@ -384,14 +320,11 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
         pairingDataStorage.reset();
     }
 
-    private void disconnect() {
+    void disconnect() {
         Log.d("ConnectionService", "Disconnect");
-        if (disconnectionAwaiter != null) {
-            disconnectionAwaiter.interrupt();
-            disconnectionAwaiter = null;
-        }
-        setState(TelestoState.DISCONNECTED);
         cleanup();
+        if (connectionRequests.size() > 0) initiateConnection();
+        else setState(TelestoState.DISCONNECTED);
     }
 
     public synchronized void pair(String macAddress) {
@@ -422,7 +355,7 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
         initiateDisconnection();
     }
 
-    private void handleConnectionRelatedException(Exception exception, boolean critical) {
+    void handleConnectionRelatedException(Exception exception, boolean critical) {
         if (critical) Log.d("ConnectionService", "Critical exception occurred: " + exception.getClass().getCanonicalName());
         else Log.d("ConnectionService", "Exception occurred: " + exception.getClass().getCanonicalName());
         cleanup();
@@ -451,6 +384,8 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
     @Override
     public void onConnectionSucceeded() {
         Log.d("ConnectionService", "Connection succeeded");
+        waitingTime = 0;
+        socketAttempts = 0;
         if (!receiverRegistered) {
             IntentFilter intentFilter = new IntentFilter();
             intentFilter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECT_REQUESTED);
@@ -490,281 +425,14 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
         while (SatlMessage.hasCompletePacket(byteBuf)) {
             try {
                 SatlMessage satlMessage = SatlMessage.deserialize(byteBuf, pairingDataStorage.getLastNonceReceived(), pairingDataStorage.getIncomingKey());
-                processSatlMessage(satlMessage);
+                SatlMessageHandler.processSatlMessage(this, satlMessage);
             } catch (OrbitalException e) {
                 handleConnectionRelatedException(e, false);
             }
         }
     }
 
-    public void processSatlMessage(SatlMessage satlMessage) {
-        Log.d("ConnectionService", "Received SatlMessage: " + satlMessage.getClass().getSimpleName());
-        if (timeoutThread != null) {
-            timeoutThread.interrupt();
-            timeoutThread = null;
-        }
-        pairingDataStorage.setLastNonceReceived(satlMessage.getNonce());
-        if (!(satlMessage instanceof ErrorMessage)) recoveryAttempts = 0;
-        if (satlMessage instanceof ConnectionResponse) processConnectionResponse();
-        else if (satlMessage instanceof KeyResponse) processKeyResponse((KeyResponse) satlMessage);
-        else if (satlMessage instanceof VerifyDisplayResponse) processVerifyDisplayResponse();
-        else if (satlMessage instanceof VerifyConfirmResponse)
-            processVerifyConfirmResponse((VerifyConfirmResponse) satlMessage);
-        else if (satlMessage instanceof DataMessage) processDataMessage((DataMessage) satlMessage);
-        else if (satlMessage instanceof SynAckResponse) processSynAckResponse();
-        else if (satlMessage instanceof ErrorMessage)
-            processErrorMessage((ErrorMessage) satlMessage);
-    }
-
-    private void processConnectionResponse() {
-        if (getState() != TelestoState.SATL_CONNECTION_REQUEST) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), true);
-            return;
-        }
-        keyRequest = new KeyRequest();
-        keyRequest.setPreMasterKey(getKeyPair().getPublicKeyBytes());
-        keyRequest.setRandomBytes(getRandomBytes());
-        setState(TelestoState.SATL_KEY_REQUEST);
-        sendSatlMessage(keyRequest, true);
-    }
-
-    private void processKeyResponse(KeyResponse keyResponse) {
-        if (getState() != TelestoState.SATL_KEY_REQUEST) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), true);
-            return;
-        }
-        try {
-            DerivedKeys derivedKeys = Cryptograph.deriveKeys(Cryptograph.combine(keyRequest.getSatlContent(), keyResponse.getSatlContent()),
-                    Cryptograph.decryptRSA(keyPair.getPrivateKey(), keyResponse.getPreMasterSecret()),
-                    randomBytes,
-                    keyResponse.getRandomData());
-            pairingDataStorage.setCommId(keyResponse.getCommID());
-            keyRequest = null;
-            verificationString = derivedKeys.getVerificationString();
-            pairingDataStorage.setOutgoingKey(derivedKeys.getOutgoingKey());
-            pairingDataStorage.setIncomingKey(derivedKeys.getIncomingKey());
-            pairingDataStorage.setLastNonceSent(new Nonce());
-            setState(TelestoState.SATL_VERIFY_DISPLAY_REQUEST);
-            sendSatlMessage(new VerifyDisplayRequest(), true);
-        } catch (InvalidCipherTextException e) {
-            handleConnectionRelatedException(e, true);
-        }
-    }
-
-    private void processVerifyDisplayResponse() {
-        if (getState() != TelestoState.SATL_VERIFY_DISPLAY_REQUEST) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), true);
-            return;
-        }
-        setState(TelestoState.AWAITING_CODE_CONFIRMATION);
-        if (setupActivity != null) setupActivity.showVerificationString(verificationString);
-        verificationString = null;
-    }
-
-    private void processVerifyConfirmResponse(VerifyConfirmResponse verifyConfirmResponse) {
-        if (getState() != TelestoState.SATL_VERIFY_CONFIRM_REQUEST) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), true);
-            return;
-        }
-        switch (verifyConfirmResponse.getPairingStatus()) {
-            case CONFIRMED:
-                setState(TelestoState.APP_BIND_MESSAGE);
-                sendAppLayerMessage(new BindMessage());
-                break;
-            case PENDING:
-                try {
-                    Thread.sleep(200);
-                    VerifyConfirmRequest verifyConfirmRequest = new VerifyConfirmRequest();
-                    verifyConfirmRequest.setPairingStatus(PairingStatus.CONFIRMED);
-                    sendSatlMessage(verifyConfirmRequest, true);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                break;
-            case REJECTED:
-                handleConnectionRelatedException(new SatlPairingRejectedException(), true);
-                break;
-        }
-    }
-
-    private void processSynAckResponse() {
-        if (getState() != TelestoState.SATL_SYN_REQUEST) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), true);
-            return;
-        }
-        setState(TelestoState.APP_CONNECT_MESSAGE);
-        sendAppLayerMessage(new ConnectMessage());
-    }
-
-    private void processDataMessage(DataMessage dataMessage) {
-        TelestoState state = getState();
-        switch (state) {
-            case CONNECTED:
-            case APP_BIND_MESSAGE:
-            case APP_CONNECT_MESSAGE:
-            case APP_DISCONNECT_MESSAGE:
-                break;
-            default:
-                handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), false);
-                return;
-        }
-        try {
-            AppLayerMessage appLayerMessage = AppLayerMessage.unwrap(dataMessage);
-            Log.d("ConnectionService", "Received AppLayerMessage: " + appLayerMessage.getClass().getSimpleName());
-            if (!(appLayerMessage instanceof DisconnectMessage)) {
-                if (disconnectAfterMessage) {
-                    setState(TelestoState.APP_DISCONNECT_MESSAGE);
-                    completeAllRequests(new AboutToDisconnectException());
-                    sendAppLayerMessage(new DisconnectMessage());
-                }
-                if (appLayerMessage instanceof BindMessage) processBindMessage();
-                else if (appLayerMessage instanceof ConnectMessage) processConnectMessage();
-                else if (appLayerMessage instanceof ActivateServiceMessage) processActivateServiceMessage();
-                else if (appLayerMessage instanceof ServiceChallengeMessage) processServiceChallengeMessage((ServiceChallengeMessage) appLayerMessage);
-                else if (!(appLayerMessage instanceof sugar.free.telesto.parser.app_layer.connection.DisconnectMessage)) processGenericAppLayerMessage(appLayerMessage);
-            } else processDisconnectMessage();
-        } catch (Exception e) {
-            if (getState() != TelestoState.CONNECTED) handleConnectionRelatedException(e, true);
-            else {
-                Log.d("ConnectionService", "Got exception while processing request: " + e.getClass().getCanonicalName());
-                synchronized (messageRequests) {
-                    if (disconnectAfterMessage) {
-                        synchronized (activeRequest) {
-                            activeRequest.exception = e;
-                            activeRequest.notifyAll();
-                            activeRequest = null;
-                        }
-                        setState(TelestoState.APP_DISCONNECT_MESSAGE);
-                        completeAllRequests(new AboutToDisconnectException());
-                        sendAppLayerMessage(new DisconnectMessage());
-                    } else completeActiveRequest(e);
-                }
-            }
-        }
-    }
-
-    private void processBindMessage() {
-        if (getState() != TelestoState.APP_BIND_MESSAGE) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), true);
-            return;
-        }
-        pairingDataStorage.setPaired(true);
-        setState(TelestoState.CONNECTED);
-    }
-
-    private void processConnectMessage() {
-        if (getState() != TelestoState.APP_CONNECT_MESSAGE) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), false);
-            return;
-        }
-        setState(TelestoState.CONNECTED);
-    }
-
-    private void processDisconnectMessage() {
-        if (getState() != TelestoState.APP_DISCONNECT_MESSAGE) {
-            handleConnectionRelatedException(new ReceivedPacketInInvalidStateException(), false);
-            return;
-        }
-        activatedServices.clear();
-        if (!disconnectAfterMessage) {
-            setState(TelestoState.APP_CONNECT_MESSAGE);
-            sendAppLayerMessage(new ConnectMessage());
-        } else disconnect();
-    }
-
-    private void processActivateServiceMessage() {
-        synchronized (messageRequests) {
-            activatedServices.add(activeRequest.request.getService());
-            if (disconnectAfterMessage) {
-                setState(TelestoState.APP_DISCONNECT_MESSAGE);
-                completeAllRequests(new AboutToDisconnectException());
-                sendAppLayerMessage(new DisconnectMessage());
-            } else sendAppLayerMessage(activeRequest.request);
-        }
-    }
-
-    private void processServiceChallengeMessage(ServiceChallengeMessage serviceChallengeMessage) {
-        synchronized (messageRequests) {
-            if (disconnectAfterMessage) {
-                setState(TelestoState.APP_DISCONNECT_MESSAGE);
-                completeAllRequests(new AboutToDisconnectException());
-                sendAppLayerMessage(new DisconnectMessage());
-            } else {
-                sugar.free.telesto.parser.app_layer.Service service = activeRequest.request.getService();
-                ActivateServiceMessage activateServiceMessage = new ActivateServiceMessage();
-                activateServiceMessage.setServiceID(ServiceIDs.IDS.getB(service));
-                activateServiceMessage.setVersion(service.getVersion());
-                activateServiceMessage.setServicePassword(Cryptograph.getServicePasswordHash(service.getServicePassword(), serviceChallengeMessage.getRandomData()));
-                sendAppLayerMessage(activateServiceMessage);
-            }
-        }
-    }
-
-    private synchronized void processGenericAppLayerMessage(AppLayerMessage appLayerMessage) {
-        synchronized (messageRequests) {
-            if (disconnectAfterMessage) {
-                synchronized (activeRequest) {
-                    activeRequest.response = appLayerMessage;
-                    activeRequest.notifyAll();
-                    activeRequest = null;
-                }
-                setState(TelestoState.APP_DISCONNECT_MESSAGE);
-                completeAllRequests(new AboutToDisconnectException());
-                sendAppLayerMessage(new DisconnectMessage());
-            } else completeActiveRequest(appLayerMessage);
-        }
-    }
-
-    private void processErrorMessage(ErrorMessage errorMessage) {
-        switch (errorMessage.getError()) {
-            case INVALID_NONCE:
-                if (state == TelestoState.SATL_SYN_REQUEST) {
-                    Nonce nonce = pairingDataStorage.getLastNonceSent();
-                    nonce.increment(NONCE_RECOVERY_INCREASE - 1);
-                    pairingDataStorage.setLastNonceSent(nonce);
-                    lastSatlMessage.setNonce(nonce);
-                } else {
-                    handleConnectionRelatedException(new RecoveryFailedException(), true);
-                    break;
-                }
-            case INVALID_CRC:
-            case INVALID_MAC_TRAILER:
-            case DECRYPT_VERIFY_FAILED:
-                recoveryAttempts++;
-                if (recoveryAttempts <= 10) sendSatlMessage(lastSatlMessage, false);
-                else handleConnectionRelatedException(new RecoveryFailedException(), true);
-                break;
-            case INVALID_PAYLOAD_LENGTH:
-                handleConnectionRelatedException(new SatlInvalidPayloadLengthErrorException(), false);
-                break;
-            case INVALID_MESSAGE_TYPE:
-                handleConnectionRelatedException(new SatlInvalidMessageTypeErrorException(), false);
-                break;
-            case INCOMPATIBLE_VERSION:
-                handleConnectionRelatedException(new SatlIncompatibleVersionErrorException(), true);
-                break;
-            case COMPATIBLE_STATE:
-                handleConnectionRelatedException(new SatlCompatibleStateErrorException(), true);
-                break;
-            case INVALID_COMM_ID:
-                handleConnectionRelatedException(new SatlInvalidCommIdErrorException(), true);
-                break;
-            case INVALID_PACKET:
-                handleConnectionRelatedException(new SatlInvalidPacketErrorException(), false);
-                break;
-            case WRONG_STATE:
-                handleConnectionRelatedException(new SatlWrongStateException(), true);
-                break;
-            case UNDEFINED:
-                handleConnectionRelatedException(new SatlUndefinedErrorException(), true);
-                break;
-            case NONE:
-                handleConnectionRelatedException(new SatlNoneErrorException(), true);
-                break;
-        }
-    }
-
-    private void sendSatlMessage(SatlMessage satlMessage, boolean prepare) {
+    void sendSatlMessage(SatlMessage satlMessage, boolean prepare) {
         if (socketHolder == null) return;
         this.lastSatlMessage = satlMessage;
         if (prepare) {
@@ -782,7 +450,7 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
         socketHolder.sendBytes(serialized.getBytes());
     }
 
-    private void sendAppLayerMessage(AppLayerMessage appLayerMessage) {
+    void sendAppLayerMessage(AppLayerMessage appLayerMessage) {
         sendSatlMessage(AppLayerMessage.wrap(appLayerMessage), true);
     }
 
@@ -802,42 +470,6 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
             }
         }
     };
-
-    public class MessageRequest implements Comparable<MessageRequest> {
-
-        private AppLayerMessage request;
-        private AppLayerMessage response;
-        private Exception exception;
-
-        private MessageRequest(AppLayerMessage request) {
-            this.request = request;
-        }
-
-        public AppLayerMessage await() throws Exception {
-            synchronized (this) {
-                while (exception == null && response == null) wait();
-                if (exception != null) throw exception;
-                return response;
-            }
-        }
-
-        @Override
-        public int compareTo(MessageRequest messageRequest) {
-            return request.compareTo(messageRequest.request);
-        }
-
-        public AppLayerMessage getRequest() {
-            return this.request;
-        }
-
-        public AppLayerMessage getResponse() {
-            return this.response;
-        }
-
-        public Exception getException() {
-            return this.exception;
-        }
-    }
 
     public class LocalBinder extends Binder {
         public ConnectionService getService() {

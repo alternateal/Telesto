@@ -5,6 +5,7 @@ import android.os.Parcelable;
 
 public enum TelestoState implements Parcelable {
 
+    DISCONNECT_PENDING,
     APP_DISCONNECT_MESSAGE,
     DISCONNECTED,
     WAITING,

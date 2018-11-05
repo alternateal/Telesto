@@ -91,10 +91,20 @@ public class HistoryService extends Service implements TelestoApp.Initialization
 
     @Override
     public void stateChanged(TelestoState state) {
-        if (state == TelestoState.CONNECTED) synchronizeHistory();
+        switch (state) {
+            case CONNECTED:
+                synchronizeHistory();
+                break;
+            default:
+                synchronized ($threadLock) {
+                    if (thread != null) thread.interrupt();
+                }
+                break;
+        }
     }
 
     public void synchronizeHistory() {
+        if (TelestoApp.getConnectionService().getState() != TelestoState.CONNECTED) return;
         synchronized ($threadLock) {
             if (thread != null) return;
             thread = new Thread(() -> {
