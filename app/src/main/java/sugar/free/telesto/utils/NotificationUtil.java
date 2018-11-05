@@ -62,6 +62,7 @@ public class NotificationUtil {
         builder.setContentText(context.getString(R.string.critical_error_occurred));
         builder.setLights(0xFFFF0000, 500, 500);
         builder.setVibrate(new long[] {0, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200});
+        builder.setAutoCancel(true);
         Intent intent = new Intent(context, LauncherActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         builder.setContentIntent(PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT));
