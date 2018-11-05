@@ -97,12 +97,11 @@ public class AlertService extends Service implements TelestoApp.InitializationCo
 
     @Override
     public void stateChanged(TelestoState state) {
-        if (state != TelestoState.CONNECTED) {
-            if (thread != null) thread.interrupt();
-        } else {
+        if (state == TelestoState.CONNECTED) {
             thread = new Thread(this::queryActiveAlert);
             thread.start();
-        }
+
+        } else if (thread != null) thread.interrupt();
     }
 
     private void stopAlerting() {
@@ -165,6 +164,7 @@ public class AlertService extends Service implements TelestoApp.InitializationCo
                     }
                 }
             } catch (InterruptedException ignored) {
+                break;
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -181,6 +181,7 @@ public class AlertService extends Service implements TelestoApp.InitializationCo
         if (alertActivity != null)
             new Handler(Looper.getMainLooper()).post(() -> alertActivity.finish());
         stopAlerting();
+        thread = null;
     }
 
     public interface ActiveAlertCallback {

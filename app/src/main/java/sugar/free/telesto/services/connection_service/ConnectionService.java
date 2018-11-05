@@ -211,7 +211,7 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
                     recoveryAwaiter.interrupt();
                     recoveryAwaiter = null;
                     setState(TelestoState.DISCONNECTED);
-                } else if (connectionRequests.size() == 0 && (getState() != TelestoState.NOT_PAIRED || getState() != TelestoState.APP_DISCONNECT_MESSAGE || getState() != TelestoState.DISCONNECTED)) {
+                } else if (getState() != TelestoState.NOT_PAIRED && getState() != TelestoState.APP_DISCONNECT_MESSAGE && getState() != TelestoState.DISCONNECTED) {
                     long disconnectionDelay = Math.max(1000, Math.min(30000, Long.parseLong(TelestoApp.getSharedPreferences().getString("disconnectionDelay", "10000"))));
                     Log.i("DisconnectionDelay", disconnectionDelay + "");
                     disconnectionAwaiter = DelayedActionThread.runDelayed(disconnectionDelay, this::disconnectionDelayExceeded);

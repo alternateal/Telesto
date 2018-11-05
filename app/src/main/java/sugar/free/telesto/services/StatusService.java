@@ -217,8 +217,7 @@ public class StatusService extends Service implements ConnectionService.StateCal
                 Thread.sleep(currentRate);
                 queryStatusRegister();
             }
-        } catch (InterruptedException ignored) {
-        } catch (Exception e) {
+        } catch (Exception ignored) {
         }
     }
 
@@ -269,6 +268,7 @@ public class StatusService extends Service implements ConnectionService.StateCal
                 if (operatingMode == OperatingMode.STOPPED) saveActiveBoluses(null);
                 else saveActiveBoluses(MessageRequestUtil.getActiveBoluses());
             }
+        } catch (InterruptedException ignored) {
         } catch (Exception e) {
             e.printStackTrace();
         }
