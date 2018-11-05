@@ -358,6 +358,8 @@ public class ConnectionService extends Service implements SocketHolder.Callback 
     void handleConnectionRelatedException(Exception exception, boolean critical) {
         if (critical) Log.d("ConnectionService", "Critical exception occurred: " + exception.getClass().getCanonicalName());
         else Log.d("ConnectionService", "Exception occurred: " + exception.getClass().getCanonicalName());
+        messageQueue.completeActiveRequest(exception);
+        messageQueue.completePendingRequests(exception);
         cleanup();
         if (!pairingDataStorage.isPaired()) {
             if (setupActivity != null) setupActivity.displayException(exception);

@@ -6,7 +6,7 @@ import sugar.free.telesto.descriptors.TelestoState;
 import sugar.free.telesto.exceptions.ReceivedPacketInInvalidStateException;
 import sugar.free.telesto.exceptions.RecoveryFailedException;
 import sugar.free.telesto.exceptions.SatlPairingRejectedException;
-import sugar.free.telesto.exceptions.SatlWrongStateException;
+import sugar.free.telesto.exceptions.satl_errors.SatlWrongStateException;
 import sugar.free.telesto.exceptions.satl_errors.SatlCompatibleStateErrorException;
 import sugar.free.telesto.exceptions.satl_errors.SatlIncompatibleVersionErrorException;
 import sugar.free.telesto.exceptions.satl_errors.SatlInvalidCommIdErrorException;

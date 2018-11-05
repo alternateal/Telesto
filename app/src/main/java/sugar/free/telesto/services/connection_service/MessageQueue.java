@@ -40,6 +40,7 @@ public class MessageQueue {
                 messageRequest.notifyAll();
             }
         }
+        messageRequests.clear();
     }
 
     public synchronized void enqueueRequest(MessageRequest messageRequest) {
